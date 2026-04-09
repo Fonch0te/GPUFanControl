@@ -1,110 +1,81 @@
-#!/usr/bin/env bash
-# GPU Fan Control - Install Script
-# Creates venv, installs deps, sets up systemd user services
-set -euo pipefail
+#!/bin/bash
 
-PROJECT_DIR="$HOME/gpu-fan-control"
-VENV_DIR="$PROJECT_DIR/venv"
-SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-DATA_DIR="$PROJECT_DIR/data"
+# GPU Fan Control Installation Script
+# Targets: Ubuntu (A6000 or 3090 machines)
 
-echo "=== GPU Fan Control Installer ==="
-echo ""
+set -e
 
-# 1. Create directories
-echo "[1/7] Creating directories..."
-mkdir -p "$DATA_DIR"
-mkdir -p "$PROJECT_DIR/config"
+# --- Configuration ---
+PROJECT_DIR="$(pwd)"
+VENV_PATH="$PROJECT_DIR/venv"
+DISPLAY_VAL=":1"
 
-# 2. Create virtual environment
-echo "[2/7] Creating Python virtual environment..."
-python3 -m venv "$VENV_DIR"
-source "$VENV_DIR/bin/activate"
+echo "🚀 Starting GPU Fan Control Installation..."
 
-# 3. Install dependencies
-echo "[3/7] Installing dependencies..."
-pip install --upgrade pip -q
-pip install -r "$PROJECT_DIR/requirements.txt" -q
-echo "  Dependencies installed"
+# 1. Check for root/sudo privileges
+if [ "$EUID" -ne 0 ]; then
+  echo "⚠️  Warning: Some steps require sudo. You may be prompted for your password."
+fi
 
-# 4. Copy default config if needed
-if [ ! -f "$PROJECT_DIR/config/gpu-fan-control.json" ]; then
-    cp "$PROJECT_DIR/config/default.json" "$PROJECT_DIR/config/gpu-fan-control.json"
-    echo "[4/7] Created default configuration"
+# 2. Install System Dependencies
+echo "📦 Installing system dependencies..."
+apt-get update
+apt-get install -y nvidia-settings xserver-xorg-core x11-xserver-utils python3-venv
+
+# 3. Enable Coolbits 28 (Crucial for manual fan control)
+echo "⚙️  Enabling Coolbits 28 in Xorg configuration..."
+# This command adds the Coolbits option to the Device section of the X config
+# It's the standard way to unlock fan control on NVIDIA Linux drivers
+if grep -q "Coolbits" /etc/X11/xorg.conf 2>/dev/null; then
+    echo "Coolbits already present in /etc/X11/xorg.conf"
 else
-    echo "[4/7] Configuration already exists, skipping"
-fi
-
-# 5. Detect XAUTHORITY
-echo "[5/7] Detecting X11 environment..."
-XAUTH_PATH=""
-if [ -f "/run/user/$(id -u)/gdm/Xauthority" ]; then
-    XAUTH_PATH="/run/user/$(id -u)/gdm/Xauthority"
-elif [ -f "$HOME/.Xauthority" ]; then
-    XAUTH_PATH="$HOME/.Xauthority"
-fi
-
-if [ -n "$XAUTH_PATH" ]; then
-    echo "  XAUTHORITY: $XAUTH_PATH"
-else
-    echo "  WARNING: Could not detect XAUTHORITY"
-fi
-
-# 6. Install systemd user services
-echo "[6/7] Installing systemd services..."
-mkdir -p "$SYSTEMD_USER_DIR"
-
-# Copy service files (systemd %h expands to $HOME automatically)
-cp "$PROJECT_DIR/systemd/gpu-fan-control.service" "$SYSTEMD_USER_DIR/"
-cp "$PROJECT_DIR/systemd/gpu-fan-control-ui.service" "$SYSTEMD_USER_DIR/"
-
-# Add XAUTHORITY if detected
-if [ -n "$XAUTH_PATH" ]; then
-    # Append XAUTHORITY to the daemon service
-    if ! grep -q "XAUTHORITY" "$SYSTEMD_USER_DIR/gpu-fan-control.service"; then
-        sed -i "/^Environment=DISPLAY/a Environment=XAUTHORITY=$XAUTH_PATH" \
-            "$SYSTEMD_USER_DIR/gpu-fan-control.service"
+    # If xorg.conf doesn't exist, we create a minimal one or add to xorg.conf.d
+    # We use the nvidia-xconfig tool if available, otherwise we append to the config
+    if command -v nvidia-xconfig >/dev/null 2>&1; then
+        nvidia-xconfig --cool-bits=28
+        echo "✅ Coolbits enabled via nvidia-xconfig"
+    else
+        echo "❌ nvidia-xconfig not found. Please run: sudo nvidia-xconfig --cool-bits=28"
+        echo "   and restart your X server."
     fi
 fi
 
-# Enable lingering (services run without active session)
-if ! loginctl enable-linger "$(whoami)" 2>/dev/null; then
-    echo "  WARNING: Could not enable linger. Run manually with sudo:"
-    echo "    sudo loginctl enable-linger $(whoami)"
-    echo "  Without linger, the fan daemon won't start until you log in."
+# 4. Setup Python Virtual Environment
+echo "🐍 Setting up Python environment..."
+cd "$PROJECT_DIR"
+if [ ! -d "$VENV_PATH" ]; then
+    python3 -m venv venv
 fi
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
 
-# Reload and enable
-systemctl --user daemon-reload
-systemctl --user enable gpu-fan-control.service
-echo "  Daemon service enabled"
+# 5. Configure Systemd User Services
+echo "🛠️  Configuring systemd user services..."
+mkdir -p ~/.config/systemd/user/
 
-# 7. Verify setup
-echo "[7/7] Verifying setup..."
+# Copy the service files from the project directory to the user's systemd folder
+cp "$PROJECT_DIR/systemd/gpu-fan-control.service" ~/.config/systemd/user/
+cp "$PROJECT_DIR/systemd/gpu-fan-control-ui.service" ~/.config/systemd/user/
 
-# Test pynvml
-if "$VENV_DIR/bin/python" -c "import pynvml; pynvml.nvmlInit(); count=pynvml.nvmlDeviceGetCount(); pynvml.nvmlShutdown(); print(f'  pynvml OK: {count} GPUs')" 2>/dev/null; then
-    :
-else
-    echo "  WARNING: pynvml verification failed"
-fi
+# Update the service files to use the correct environment and DISPLAY
+# We use sed to ensure the DISPLAY variable is set correctly
+sed -i "s/DISPLAY=:.*/DISPLAY=$DISPLAY_VAL/" ~/.config/systemd/user/gpu-fan-control.service
 
-# Test nvidia-settings
-if DISPLAY=:1 nvidia-settings -q "[gpu:0]/GPUFanControlState" >/dev/null 2>&1; then
-    echo "  nvidia-settings: OK"
-else
-    echo "  WARNING: nvidia-settings cannot access GPU (check DISPLAY)"
-fi
-
+# 6. Finalizing and Verification
+echo "🏁 Installation complete!"
+echo "-------------------------------------------------------------------"
+echo "NEXT STEPS:"
+echo "1. REBOOT your machine (or restart X server) for Coolbits to take effect."
+echo "2. Enable the daemon to start on boot:"
+echo "   systemctl --user daemon-reload"
+echo "   systemctl --user enable gpu-fan-control"
+echo "   systemctl --user start gpu-fan-control"
 echo ""
-echo "=== Installation Complete ==="
-echo ""
-echo "Commands:"
-echo "  Start daemon:   systemctl --user start gpu-fan-control"
-echo "  Stop daemon:    systemctl --user stop gpu-fan-control"
-echo "  Daemon logs:    journalctl --user -u gpu-fan-control -f"
-echo "  Start UI:       systemctl --user start gpu-fan-control-ui"
-echo "  UI URL:         http://localhost:8502"
-echo ""
-echo "Quick test (manual):"
-echo "  $VENV_DIR/bin/python $PROJECT_DIR/src/daemon.py"
+echo "3. Start the UI (Optional):"
+echo "   systemctl --user start gpu-fan-control-ui"
+echo "   Then open: http://localhost:8505"
+echo "-------------------------------------------------------------------"
+echo "Verification Command:"
+echo "To check if manual control is working, run:"
+echo "DISPLAY=$DISPLAY_VAL nvidia-settings -a '[gpu:0]/GPUFanControlState=1'"
