@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "poll_interval_seconds": 5,
+  "hysteresis_celsius": 3,
+  "display": ":1",
+  "log_level": "INFO",
+  "history_retention_minutes": 120,
+  "fan_curve": [
+    {"temp_c": 30, "fan_pct": 30},
+    {"temp_c": 40, "fan_pct": 35},
+    {"temp_c": 50, "fan_pct": 45},
+    {"temp_c": 60, "fan_pct": 55},
+    {"temp_c": 70, "fan_pct": 70},
+    {"temp_c": 80, "fan_pct": 85},
+    {"temp_c": 90, "fan_pct": 100}
+  ],
+  "gpus": {
+    "0": {"enabled": true, "label": "GPU 0"},
+    "1": {"enabled": true, "label": "GPU 1"},
+    "2": {"enabled": true, "label": "GPU 2"}
+  },
+  "profiles": {
+    "default": [
+      {"temp_c": 30, "fan_pct": 30},
+      {"temp_c": 40, "fan_pct": 35},
+      {"temp_c": 50, "fan_pct": 45},
+      {"temp_c": 60, "fan_pct": 55},
+      {"temp_c": 70, "fan_pct": 70},
+      {"temp_c": 80, "fan_pct": 85},
+      {"temp_c": 90, "fan_pct": 100}
+    ],
+    "quiet": [
+      {"temp_c": 30, "fan_pct": 25},
+      {"temp_c": 50, "fan_pct": 35},
+      {"temp_c": 70, "fan_pct": 50},
+      {"temp_c": 85, "fan_pct": 75},
+      {"temp_c": 93, "fan_pct": 100}
+    ],
+    "aggressive": [
+      {"temp_c": 30, "fan_pct": 40},
+      {"temp_c": 40, "fan_pct": 55},
+      {"temp_c": 50, "fan_pct": 70},
+      {"temp_c": 60, "fan_pct": 85},
+      {"temp_c": 70, "fan_pct": 100}
+    ]
+  }
+}

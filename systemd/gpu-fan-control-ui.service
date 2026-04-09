@@ -1,0 +1,18 @@
+[Unit]
+Description=GPU Fan Control Web UI
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/gpu-fan-control/venv/bin/streamlit run %h/gpu-fan-control/ui/app.py --server.port 8505 --server.headless true --server.address 127.0.0.1
+WorkingDirectory=%h/gpu-fan-control
+
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gpu-fan-control-ui
+
+[Install]
+WantedBy=default.target

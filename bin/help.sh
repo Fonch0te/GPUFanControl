@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Show all available commands
+echo "GPU Fan Control - Commands"
+echo "========================="
+echo ""
+echo "  bin/start.sh      Start the fan control daemon"
+echo "  bin/stop.sh       Stop daemon (fans reset to auto)"
+echo "  bin/restart.sh    Restart daemon"
+echo "  bin/status.sh     Show daemon + GPU status"
+echo "  bin/logs.sh       Follow daemon logs"
+echo ""
+echo "  bin/ui-start.sh   Start the Streamlit control panel"
+echo "  bin/ui-open.sh    Open UI in browser (http://localhost:8505)"
+echo ""
+echo "  bin/help.sh       This help message"
+echo "  install.sh        Full setup (venv, deps, systemd)"

@@ -1,0 +1,4 @@
+nvidia-ml-py>=12.560.30
+streamlit>=1.30.0
+plotly>=5.18.0
+pandas>=2.1.0
