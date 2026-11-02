@@ -17,7 +17,9 @@ from models import GpuState, HistoryEntry
 
 logger = logging.getLogger("gpu-fan-control.history")
 
-DATA_DIR = Path.home() / "gpu-fan-control" / "data"
+# Shared with the UI. Overridable so the daemon can run as root (NVML fan
+# writes require root on driver >= 520) while the UI reads as the login user.
+DATA_DIR = Path(os.environ.get("GPU_FAN_CONTROL_DATA_DIR") or (Path.home() / "gpu-fan-control" / "data"))
 HISTORY_PATH = DATA_DIR / "history.json"
 STATUS_PATH = DATA_DIR / "status.json"
 

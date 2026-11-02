@@ -1,0 +1,36 @@
+# GPU Fan Control daemon — SYSTEM unit, runs as root.
+#
+# Why root: with NVIDIA driver >= 520, nvidia-settings delegates fan-speed
+# writes to NVML (nvmlDeviceSetFanSpeed_v2), and NVML refuses them from a
+# non-root user ("Operation not permitted for the current user" /
+# "Insufficient Permissions"). The user-level unit therefore cannot control
+# the fans any more. The UI keeps running as the login user and reads the
+# status/history files from the user's data dir (GPU_FAN_CONTROL_DATA_DIR).
+#
+# Installed by bin/install-system-service.sh, which fills in the @PLACEHOLDERS@.
+
+[Unit]
+Description=GPU Fan Control Daemon (root)
+After=display-manager.service
+Wants=nvidia-persistenced.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Environment=DISPLAY=:1
+Environment=XAUTHORITY=/run/user/@UID@/gdm/Xauthority
+Environment=GPU_FAN_CONTROL_DATA_DIR=@HOME@/gpu-fan-control/data
+ExecStart=@PROJECT_DIR@/venv/bin/python @PROJECT_DIR@/src/daemon.py --config @PROJECT_DIR@/config/gpu-fan-control.json
+ExecStop=/bin/kill -TERM $MAINPID
+WorkingDirectory=@PROJECT_DIR@
+UMask=0022
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gpu-fan-control
+
+[Install]
+WantedBy=multi-user.target

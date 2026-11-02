@@ -126,8 +126,12 @@ class NvidiaFanWriter:
                 text=True,
                 timeout=10,
             )
-            if result.returncode != 0:
-                logger.error(f"nvidia-settings failed [{assignment}]: {result.stderr.strip()}")
+            # nvidia-settings exits 0 even when an assignment fails, so the
+            # exit code alone is not enough: scan the output for ERROR lines.
+            output = (result.stdout + result.stderr).strip()
+            if result.returncode != 0 or "ERROR" in output:
+                err = next((ln.strip() for ln in output.splitlines() if "ERROR" in ln), output)
+                logger.error(f"nvidia-settings failed [{assignment}]: {err}")
                 return False
             logger.debug(f"nvidia-settings OK: {assignment}")
             return True

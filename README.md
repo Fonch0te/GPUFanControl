@@ -95,6 +95,16 @@ sudo bin/fix-nvidia-settings.sh
 Both scripts are idempotent and safe to re-run — they detect whether a fix is
 needed and do nothing if everything is already correct.
 
+**Writes fail with "Operation not permitted for the current user"**
+
+NVIDIA driver 520+ routes `nvidia-settings` fan writes through NVML, which
+only root may call, so the per-user service can no longer move the fans.
+Switch to the root system service (the UI stays per-user):
+
+```bash
+sudo bin/install-system-service.sh
+```
+
 See [docs/managing-fan-control-rtx-3090.md](docs/managing-fan-control-rtx-3090.md)
 for the full RTX 3090 setup/maintenance guide, and
 [docs/troubleshooting-fan-control-not-working.md](docs/troubleshooting-fan-control-not-working.md)
