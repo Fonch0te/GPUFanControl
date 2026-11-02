@@ -13,7 +13,7 @@ from models import DaemonConfig, FanCurvePoint, GpuConfig
 
 logger = logging.getLogger("gpu-fan-control.config")
 
-DEFAULT_CONFIG_PATH = Path("/Projects/gpu-fan-control/config/gpu-fan-control.json")
+DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "config" / "gpu-fan-control.json"
 
 
 class ConfigManager:

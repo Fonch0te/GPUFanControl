@@ -46,6 +46,7 @@ class FanControlDaemon:
         self._running = False
         self._start_time = 0.0
         self._config = None
+        self._gpu_count = 0
 
     def run(self):
         """Main entry point. Blocks until shutdown signal."""
@@ -66,6 +67,7 @@ class FanControlDaemon:
             logger.critical(f"Failed to initialize NVML: {e}")
             sys.exit(1)
 
+        self._gpu_count = gpu_count
         logger.info(f"Discovered {gpu_count} GPUs")
 
         self._writer = NvidiaFanWriter(display=self._config.display)
@@ -104,18 +106,19 @@ class FanControlDaemon:
             auto_map = self._writer.detect_index_mapping(gpu_count)
 
             self._idx_map.clear()
-            for idx_str, gpu_cfg in self._config.gpus.items():
-                idx = int(idx_str)
+            for idx in range(gpu_count):
                 entry = auto_map.get(idx, {"nv_gpu": idx, "nv_fan": idx, "pci_bus": "unknown"})
-                if gpu_cfg.fan_index is not None:
+                gpu_cfg = self._config.gpus.get(str(idx))
+                if gpu_cfg is not None and gpu_cfg.fan_index is not None:
                     entry = {**entry, "nv_fan": gpu_cfg.fan_index}
                 self._idx_map[idx] = entry
 
             # Step 2: enable manual fan control on each enabled GPU
             all_ok = True
-            for idx_str, gpu_cfg in self._config.gpus.items():
-                idx = int(idx_str)
-                if gpu_cfg.enabled:
+            for idx in range(gpu_count):
+                gpu_cfg = self._config.gpus.get(str(idx))
+                enabled = gpu_cfg.enabled if gpu_cfg is not None else True
+                if enabled:
                     nv_gpu = self._idx_map[idx]["nv_gpu"]
                     if not self._writer.enable_manual_control(nv_gpu):
                         all_ok = False
@@ -216,9 +219,10 @@ class FanControlDaemon:
         logger.info("Shutting down, resetting fans to auto mode...")
 
         if self._writer and self._config:
-            for idx_str, gpu_cfg in self._config.gpus.items():
-                idx = int(idx_str)
-                if gpu_cfg.enabled:
+            for idx in range(self._gpu_count):
+                gpu_cfg = self._config.gpus.get(str(idx))
+                enabled = gpu_cfg.enabled if gpu_cfg is not None else True
+                if enabled:
                     nv_gpu = self._idx_map.get(idx, {"nv_gpu": idx})["nv_gpu"]
                     self._writer.disable_manual_control(nv_gpu)
                     logger.info(f"GPU {idx} (nv gpu:{nv_gpu}): fan control reset to auto")

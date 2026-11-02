@@ -75,3 +75,27 @@ config/default.json            Factory defaults
 - Python 3.11+
 - nvidia-settings CLI
 - X11 display (DISPLAY=:1)
+
+## Troubleshooting
+
+**Fans stuck at 0% / "Unknown Error" from nvidia-settings**
+
+On GeForce cards (e.g. RTX 3090) two independent things must both be correct
+before fan control works. The installer checks both automatically; you can also
+run them by hand:
+
+```bash
+# 1. Kernel module must be proprietary, not open (REQUIRES REBOOT)
+sudo bin/fix-open-driver.sh
+
+# 2. nvidia-settings must match the driver version (no reboot)
+sudo bin/fix-nvidia-settings.sh
+```
+
+Both scripts are idempotent and safe to re-run — they detect whether a fix is
+needed and do nothing if everything is already correct.
+
+See [docs/managing-fan-control-rtx-3090.md](docs/managing-fan-control-rtx-3090.md)
+for the full RTX 3090 setup/maintenance guide, and
+[docs/troubleshooting-fan-control-not-working.md](docs/troubleshooting-fan-control-not-working.md)
+for the detailed diagnosis history.

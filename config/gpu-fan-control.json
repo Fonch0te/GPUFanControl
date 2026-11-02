@@ -43,10 +43,6 @@
     "1": {
       "enabled": true,
       "label": "GPU 1"
-    },
-    "2": {
-      "enabled": true,
-      "label": "GPU 2"
     }
   },
   "profiles": {
