@@ -29,6 +29,7 @@ class MoboFanConfig:
     label: str = ""
     enabled: bool = True
     source: str = "cpu"            # cpu | gpu | max (hotter of the two)
+    smoothing_seconds: int = 0     # rolling average window for the source temp (0 = raw)
     curve: list[FanCurvePoint] = field(default_factory=list)
 
 
@@ -62,7 +63,8 @@ class MoboFanState:
     label: str
     pwm: int
     source: str
-    source_temp_c: int
+    source_temp_c: int             # smoothed value fed to the curve
+    raw_temp_c: int                # latest raw sensor reading
     duty_pct: int
     rpm: int
     target_pct: int

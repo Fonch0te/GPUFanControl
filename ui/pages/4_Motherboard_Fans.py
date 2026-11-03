@@ -76,6 +76,8 @@ def render_live(status: dict, chip: str):
                     a, b = st.columns(2)
                     a.metric("Duty", f"{s['duty_pct']}%", delta=f"target {s['target_pct']}%")
                     b.metric("RPM", s["rpm"] if s["rpm"] >= 0 else "n/a")
+                    raw = s.get("raw_temp_c", s["source_temp_c"])
+                    st.caption(f"source {s['source_temp_c']} C (raw {raw} C)")
                     if s.get("error"):
                         st.error(s["error"])
         else:
@@ -139,7 +141,7 @@ def render_editor(config, mgr):
     if state_key not in st.session_state:
         st.session_state[state_key] = [{"temp_c": p.temp_c, "fan_pct": p.fan_pct} for p in fan.curve]
 
-    c1, c2, c3, c4 = st.columns([3, 1, 2, 1])
+    c1, c2, c3, c4, c5 = st.columns([3, 1, 2, 1, 1])
     label = c1.text_input("Label", value=fan.label)
     pwm = c2.number_input("Header (pwmN)", min_value=1, max_value=16, value=int(fan.pwm), step=1)
     source = c3.selectbox(
@@ -147,7 +149,12 @@ def render_editor(config, mgr):
         index=list(SOURCES.keys()).index(fan.source),
         format_func=lambda k: SOURCES[k],
     )
-    fan_enabled = c4.toggle("Enabled", value=fan.enabled)
+    smoothing = c4.number_input(
+        "Smoothing (s)", min_value=0, max_value=600, value=int(fan.smoothing_seconds), step=5,
+        help="Rolling average window for the source temperature. 0 = raw. "
+             "45-60 s is a good start for a radiator; keeps the fans from hunting on CPU spikes.",
+    )
+    fan_enabled = c5.toggle("Enabled", value=fan.enabled)
 
     col_chart, col_table = st.columns([3, 2])
     with col_table:
@@ -188,6 +195,7 @@ def render_editor(config, mgr):
                 fan.label = label
                 fan.pwm = int(pwm)
                 fan.source = source
+                fan.smoothing_seconds = int(smoothing)
                 fan.enabled = fan_enabled
                 fan.curve = [
                     FanCurvePoint(temp_c=int(p["temp_c"]), fan_pct=int(p["fan_pct"]))

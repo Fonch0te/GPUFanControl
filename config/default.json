@@ -137,7 +137,7 @@
         "curve": [
           {
             "temp_c": 30,
-            "fan_pct": 30
+            "fan_pct": 35
           },
           {
             "temp_c": 45,
@@ -159,7 +159,8 @@
             "temp_c": 85,
             "fan_pct": 100
           }
-        ]
+        ],
+        "smoothing_seconds": 45
       }
     }
   }

@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import logging
+from collections import deque
 import os
 import signal
 import sys
@@ -54,6 +55,8 @@ class FanControlDaemon:
         self._mobo_writer: HwmonFanWriter | None = None
         self._cpu_temp: CpuTempReader | None = None
         self._mobo_controllers: dict[str, FanController] = {}
+        # name -> deque of (timestamp, raw temp) for rolling-average smoothing
+        self._mobo_temp_hist: dict[str, deque] = {}
 
     def run(self):
         """Main entry point. Blocks until shutdown signal."""
@@ -187,6 +190,7 @@ class FanControlDaemon:
             self._mobo_writer.release_all()
         self._mobo_writer = None
         self._mobo_controllers.clear()
+        self._mobo_temp_hist.clear()
 
     def _apply_mobo_control(self, gpu_states) -> tuple[list[MoboFanState], int | None]:
         """Compute and write motherboard fan duties. Returns (states, cpu_temp)."""
@@ -214,6 +218,19 @@ class FanControlDaemon:
 
             duty, rpm = self._mobo_writer.read(fan.pwm)
 
+            # Rolling average: the package sensor spikes 15-20C on short bursts
+            # while a radiator's coolant moves over minutes. Averaging the input
+            # stops the fans hunting without slowing the response to real load.
+            raw_temp = src_temp
+            if src_temp is not None and fan.smoothing_seconds > 0:
+                now = time.time()
+                hist = self._mobo_temp_hist.setdefault(name, deque())
+                hist.append((now, src_temp))
+                cutoff = now - fan.smoothing_seconds
+                while hist and hist[0][0] < cutoff:
+                    hist.popleft()
+                src_temp = round(sum(t for _, t in hist) / len(hist))
+
             if src_temp is None:
                 # Failsafe: no usable sensor -> run the top of the curve.
                 target = max(pt.fan_pct for pt in fan.curve)
@@ -227,8 +244,9 @@ class FanControlDaemon:
             if changed or drifted:
                 if self._mobo_writer.set_duty(fan.pwm, target):
                     reason = "drift correction" if drifted else "curve"
+                    raw_note = f" (raw {raw_temp}C)" if raw_temp != src_temp else ""
                     logger.info(
-                        f"Mobo '{name}': {fan.source} {src_temp}C -> pwm{fan.pwm} {target}% "
+                        f"Mobo '{name}': {fan.source} {src_temp}C{raw_note} -> pwm{fan.pwm} {target}% "
                         f"(actual was {duty}%, {rpm} rpm, {reason})"
                     )
                 else:
@@ -241,6 +259,7 @@ class FanControlDaemon:
                 pwm=fan.pwm,
                 source=fan.source,
                 source_temp_c=src_temp if src_temp is not None else -1,
+                raw_temp_c=raw_temp if raw_temp is not None else -1,
                 duty_pct=duty,
                 rpm=rpm,
                 target_pct=target,

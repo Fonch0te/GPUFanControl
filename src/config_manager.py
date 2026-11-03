@@ -98,6 +98,8 @@ class ConfigManager:
                 raise ValueError(f"Motherboard fan '{name}': pwm must be a positive header index")
             if fan.source not in ("cpu", "gpu", "max"):
                 raise ValueError(f"Motherboard fan '{name}': source must be cpu, gpu or max")
+            if fan.smoothing_seconds < 0 or fan.smoothing_seconds > 600:
+                raise ValueError(f"Motherboard fan '{name}': smoothing_seconds must be 0-600")
             self._validate_curve(fan.curve, f"Motherboard fan '{name}' curve")
         pwms = [f.pwm for f in mobo.fans.values() if f.enabled]
         if len(pwms) != len(set(pwms)):
@@ -138,6 +140,7 @@ class ConfigManager:
                 label=f.get("label", name),
                 enabled=f.get("enabled", True),
                 source=f.get("source", "cpu"),
+                smoothing_seconds=int(f.get("smoothing_seconds", 0)),
                 curve=[
                     FanCurvePoint(temp_c=pt["temp_c"], fan_pct=pt["fan_pct"])
                     for pt in f.get("curve", [])
@@ -196,6 +199,7 @@ class ConfigManager:
                         "label": fan.label,
                         "enabled": fan.enabled,
                         "source": fan.source,
+                        "smoothing_seconds": fan.smoothing_seconds,
                         "curve": [
                             {"temp_c": pt.temp_c, "fan_pct": pt.fan_pct} for pt in fan.curve
                         ],
