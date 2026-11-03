@@ -86,34 +86,33 @@ def main():
             st.error("Daemon: STOPPED")
 
     with col_actions:
+        # The daemon is a root *system* service (NVML fan writes need root), so
+        # these go through sudo -n; they only work if sudoers allows it.
+        def _svc(action: str):
+            import subprocess
+            r = subprocess.run(
+                ["sudo", "-n", "systemctl", action, "gpu-fan-control"],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                st.error(
+                    f"Could not {action} the service from the UI "
+                    f"(run `sudo systemctl {action} gpu-fan-control` in a terminal). "
+                    f"{r.stderr.strip()}"
+                )
+            time.sleep(3)
+            st.rerun()
+
         c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("Start Daemon", disabled=is_running):
-                import subprocess
-                subprocess.run(
-                    ["systemctl", "--user", "start", "gpu-fan-control"],
-                    capture_output=True,
-                )
-                time.sleep(2)
-                st.rerun()
+                _svc("start")
         with c2:
             if st.button("Stop Daemon", disabled=not is_running):
-                import subprocess
-                subprocess.run(
-                    ["systemctl", "--user", "stop", "gpu-fan-control"],
-                    capture_output=True,
-                )
-                time.sleep(2)
-                st.rerun()
+                _svc("stop")
         with c3:
             if st.button("Restart Daemon", disabled=not is_running):
-                import subprocess
-                subprocess.run(
-                    ["systemctl", "--user", "restart", "gpu-fan-control"],
-                    capture_output=True,
-                )
-                time.sleep(3)
-                st.rerun()
+                _svc("restart")
 
     st.divider()
 

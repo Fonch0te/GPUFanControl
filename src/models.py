@@ -23,6 +23,24 @@ class GpuConfig:
 
 
 @dataclass
+class MoboFanConfig:
+    """One motherboard fan header driven by the daemon."""
+    pwm: int                       # hwmon pwmN index (fanN_input is its tach)
+    label: str = ""
+    enabled: bool = True
+    source: str = "cpu"            # cpu | gpu | max (hotter of the two)
+    curve: list[FanCurvePoint] = field(default_factory=list)
+
+
+@dataclass
+class MotherboardConfig:
+    """Motherboard (Super I/O) fan control section."""
+    enabled: bool = False
+    chip: str = "nct6796"          # hwmon `name` attribute to resolve by
+    fans: dict[str, MoboFanConfig] = field(default_factory=dict)
+
+
+@dataclass
 class DaemonConfig:
     """Complete daemon configuration loaded from JSON."""
     version: int = 1
@@ -34,6 +52,22 @@ class DaemonConfig:
     fan_curve: list[FanCurvePoint] = field(default_factory=list)
     gpus: dict[str, GpuConfig] = field(default_factory=dict)
     profiles: dict[str, list[FanCurvePoint]] = field(default_factory=dict)
+    motherboard: MotherboardConfig = field(default_factory=MotherboardConfig)
+
+
+@dataclass
+class MoboFanState:
+    """Snapshot of one daemon-controlled motherboard fan header."""
+    name: str
+    label: str
+    pwm: int
+    source: str
+    source_temp_c: int
+    duty_pct: int
+    rpm: int
+    target_pct: int
+    timestamp: float = field(default_factory=time.time)
+    error: Optional[str] = None
 
 
 @dataclass

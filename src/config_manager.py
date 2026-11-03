@@ -9,7 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from models import DaemonConfig, FanCurvePoint, GpuConfig
+from models import DaemonConfig, FanCurvePoint, GpuConfig, MoboFanConfig, MotherboardConfig
 
 logger = logging.getLogger("gpu-fan-control.config")
 
@@ -70,23 +70,38 @@ class ConfigManager:
         self._last_mtime = os.path.getmtime(self._path)
         self._config = config
 
+    @staticmethod
+    def _validate_curve(curve: list[FanCurvePoint], what: str = "Fan curve"):
+        if len(curve) < 2:
+            raise ValueError(f"{what} must have at least 2 points")
+
+        for i in range(len(curve) - 1):
+            if curve[i].temp_c >= curve[i + 1].temp_c:
+                raise ValueError(f"{what} temps must be strictly increasing")
+
+        for pt in curve:
+            if not (0 <= pt.fan_pct <= 100):
+                raise ValueError(f"{what}: fan speed must be 0-100, got {pt.fan_pct}")
+            if not (0 <= pt.temp_c <= 100):
+                raise ValueError(f"{what}: temp must be 0-100C, got {pt.temp_c}")
+
     def _validate(self, config: DaemonConfig):
         """Validate config. Raise ValueError on invalid."""
-        if len(config.fan_curve) < 2:
-            raise ValueError("Fan curve must have at least 2 points")
-
-        for i in range(len(config.fan_curve) - 1):
-            if config.fan_curve[i].temp_c >= config.fan_curve[i + 1].temp_c:
-                raise ValueError("Fan curve temps must be strictly increasing")
-
-        for pt in config.fan_curve:
-            if not (0 <= pt.fan_pct <= 100):
-                raise ValueError(f"Fan speed must be 0-100, got {pt.fan_pct}")
-            if not (0 <= pt.temp_c <= 100):
-                raise ValueError(f"Temp must be 0-100C, got {pt.temp_c}")
+        self._validate_curve(config.fan_curve)
 
         if config.fan_curve[-1].fan_pct < 100:
             logger.warning("Fan curve max point is not 100%% — GPUs may throttle at high temps")
+
+        mobo = config.motherboard
+        for name, fan in mobo.fans.items():
+            if not isinstance(fan.pwm, int) or fan.pwm < 1:
+                raise ValueError(f"Motherboard fan '{name}': pwm must be a positive header index")
+            if fan.source not in ("cpu", "gpu", "max"):
+                raise ValueError(f"Motherboard fan '{name}': source must be cpu, gpu or max")
+            self._validate_curve(fan.curve, f"Motherboard fan '{name}' curve")
+        pwms = [f.pwm for f in mobo.fans.values() if f.enabled]
+        if len(pwms) != len(set(pwms)):
+            raise ValueError("Two enabled motherboard fans share the same pwm header")
 
         if config.poll_interval_seconds < 1:
             raise ValueError("Poll interval must be >= 1 second")
@@ -115,6 +130,25 @@ class ConfigManager:
                 for pt in pts
             ]
 
+        mobo_raw = raw.get("motherboard", {}) or {}
+        mobo_fans = {}
+        for name, f in (mobo_raw.get("fans", {}) or {}).items():
+            mobo_fans[name] = MoboFanConfig(
+                pwm=f.get("pwm"),
+                label=f.get("label", name),
+                enabled=f.get("enabled", True),
+                source=f.get("source", "cpu"),
+                curve=[
+                    FanCurvePoint(temp_c=pt["temp_c"], fan_pct=pt["fan_pct"])
+                    for pt in f.get("curve", [])
+                ],
+            )
+        motherboard = MotherboardConfig(
+            enabled=mobo_raw.get("enabled", False),
+            chip=mobo_raw.get("chip", "nct6796"),
+            fans=mobo_fans,
+        )
+
         return DaemonConfig(
             version=raw.get("version", 1),
             poll_interval_seconds=raw.get("poll_interval_seconds", 5.0),
@@ -125,6 +159,7 @@ class ConfigManager:
             fan_curve=fan_curve,
             gpus=gpus,
             profiles=profiles,
+            motherboard=motherboard,
         )
 
     def _serialize(self, config: DaemonConfig) -> dict:
@@ -151,5 +186,21 @@ class ConfigManager:
             "profiles": {
                 name: [{"temp_c": pt.temp_c, "fan_pct": pt.fan_pct} for pt in pts]
                 for name, pts in config.profiles.items()
+            },
+            "motherboard": {
+                "enabled": config.motherboard.enabled,
+                "chip": config.motherboard.chip,
+                "fans": {
+                    name: {
+                        "pwm": fan.pwm,
+                        "label": fan.label,
+                        "enabled": fan.enabled,
+                        "source": fan.source,
+                        "curve": [
+                            {"temp_c": pt.temp_c, "fan_pct": pt.fan_pct} for pt in fan.curve
+                        ],
+                    }
+                    for name, fan in config.motherboard.fans.items()
+                },
             },
         }

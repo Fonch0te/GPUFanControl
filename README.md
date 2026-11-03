@@ -76,6 +76,38 @@ config/default.json            Factory defaults
 - nvidia-settings CLI
 - X11 display (DISPLAY=:1)
 
+## Motherboard fans (CPU radiator, case intakes)
+
+The daemon can also drive Super I/O fan headers (Nuvoton NCT67xx and
+friends) through the kernel hwmon interface, keyed to CPU temperature,
+GPU temperature, or the hotter of the two. Configure under `motherboard`
+in `config/gpu-fan-control.json` or on the **Motherboard Fans** UI page:
+
+```json
+"motherboard": {
+  "enabled": true,
+  "chip": "nct6796",
+  "fans": {
+    "cpu_radiator": { "pwm": 2, "label": "CPU radiator", "source": "cpu",
+                      "enabled": true, "curve": [ {"temp_c": 30, "fan_pct": 30}, ... ] },
+    "intakes":      { "pwm": 1, "label": "Bottom 180mm", "source": "gpu",
+                      "enabled": true, "curve": [ ... ] }
+  }
+}
+```
+
+- `chip` is the hwmon `name` (see `sensors`); hwmon indices change between boots so it is resolved by name.
+- `pwm` is the header index: `pwmN` is driven, `fanN_input` is its tachometer.
+- `source`: `cpu` (coretemp package), `gpu` (hottest GPU), or `max`.
+- Headers not listed, or with `enabled: false`, stay on the BIOS curve. On
+  shutdown every claimed header is handed back to the BIOS.
+- If the source sensor cannot be read the fan runs at the top of its curve.
+- The UI page lists every header with live RPM so you can work out which
+  physical fan is on which header after rewiring.
+
+Requires the daemon to run as root (see the system service above), which it
+already does for NVML fan writes.
+
 ## Troubleshooting
 
 **Fans stuck at 0% / "Unknown Error" from nvidia-settings**

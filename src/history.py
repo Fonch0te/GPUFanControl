@@ -13,7 +13,7 @@ import time
 from collections import deque
 from dataclasses import asdict
 from pathlib import Path
-from models import GpuState, HistoryEntry
+from models import GpuState, HistoryEntry, MoboFanState
 
 logger = logging.getLogger("gpu-fan-control.history")
 
@@ -22,6 +22,7 @@ logger = logging.getLogger("gpu-fan-control.history")
 DATA_DIR = Path(os.environ.get("GPU_FAN_CONTROL_DATA_DIR") or (Path.home() / "gpu-fan-control" / "data"))
 HISTORY_PATH = DATA_DIR / "history.json"
 STATUS_PATH = DATA_DIR / "status.json"
+MOBO_HISTORY_PATH = DATA_DIR / "mobo_history.json"
 
 
 class HistoryBuffer:
@@ -29,6 +30,7 @@ class HistoryBuffer:
         self._retention = retention_minutes * 60
         self._flush_interval = flush_interval
         self._buffer: deque[HistoryEntry] = deque()
+        self._mobo_buffer: deque[dict] = deque()
         self._last_flush: float = 0
 
     def record(self, states: list[GpuState]):
@@ -51,18 +53,49 @@ class HistoryBuffer:
             self.flush()
             self._last_flush = now
 
+    def record_mobo(self, states: list[MoboFanState], cpu_temp_c: int | None):
+        """Add motherboard fan states (and CPU temp) to history."""
+        now = time.time()
+        for s in states:
+            if s.error is None:
+                self._mobo_buffer.append({
+                    "timestamp": now,
+                    "name": s.name,
+                    "source_temp_c": s.source_temp_c,
+                    "cpu_temp_c": cpu_temp_c if cpu_temp_c is not None else -1,
+                    "duty_pct": s.duty_pct,
+                    "rpm": s.rpm,
+                    "target_pct": s.target_pct,
+                })
+        self._prune()
+
     def flush(self):
         """Write history to disk atomically."""
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         data = [asdict(e) for e in self._buffer]
         _atomic_write(HISTORY_PATH, data)
-        logger.debug(f"History flushed: {len(data)} entries")
+        if self._mobo_buffer:
+            _atomic_write(MOBO_HISTORY_PATH, list(self._mobo_buffer))
+        logger.debug(f"History flushed: {len(data)} GPU entries, {len(self._mobo_buffer)} mobo entries")
 
     def _prune(self):
         """Remove entries older than retention period."""
         cutoff = time.time() - self._retention
         while self._buffer and self._buffer[0].timestamp < cutoff:
             self._buffer.popleft()
+        while self._mobo_buffer and self._mobo_buffer[0]["timestamp"] < cutoff:
+            self._mobo_buffer.popleft()
+
+    @staticmethod
+    def load_mobo_from_disk() -> list[dict]:
+        """Load motherboard fan history (used by UI)."""
+        if not MOBO_HISTORY_PATH.exists():
+            return []
+        try:
+            with open(MOBO_HISTORY_PATH) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return []
 
     @staticmethod
     def load_from_disk() -> list[HistoryEntry]:
@@ -82,6 +115,8 @@ def write_daemon_status(
     gpu_states: list[GpuState],
     config_path: str,
     start_time: float,
+    mobo_states: list[MoboFanState] | None = None,
+    cpu_temp_c: int | None = None,
 ):
     """Write daemon status JSON for UI consumption."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -90,6 +125,8 @@ def write_daemon_status(
         "pid": os.getpid(),
         "uptime_seconds": round(time.time() - start_time, 1),
         "gpu_states": [asdict(s) for s in gpu_states],
+        "mobo_states": [asdict(s) for s in (mobo_states or [])],
+        "cpu_temperature_c": cpu_temp_c if cpu_temp_c is not None else -1,
         "config_path": config_path,
         "timestamp": time.time(),
     }

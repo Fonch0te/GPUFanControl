@@ -15,5 +15,5 @@ st.set_page_config(
 )
 
 st.title("GPU Fan Control Panel")
-st.caption("3x RTX A6000 — Fan curve management and temperature monitoring")
-st.markdown("Use the sidebar to navigate between Dashboard, Fan Curve Editor, and History.")
+st.caption("GPU and motherboard fan curves, temperature monitoring")
+st.markdown("Use the sidebar to navigate between Dashboard, Fan Curve Editor, History, and Motherboard Fans.")

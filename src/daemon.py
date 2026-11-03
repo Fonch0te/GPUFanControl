@@ -3,7 +3,8 @@
 GPU Fan Control Daemon.
 
 Polls GPU temperatures via pynvml, applies fan curve via nvidia-settings.
-Runs as a systemd user service with auto-restart.
+Optionally drives motherboard fan headers (hwmon/sysfs) from CPU and/or GPU
+temperature. Runs as a root systemd service with auto-restart.
 
 Lifecycle:
   1. Load config
@@ -31,6 +32,8 @@ from config_manager import ConfigManager, DEFAULT_CONFIG_PATH
 from fan_controller import FanController
 from gpu_monitor import GpuMonitor
 from history import HistoryBuffer, write_daemon_status, write_stopped_status
+from hwmon import CpuTempReader, HwmonFanWriter
+from models import MoboFanState
 from nvidia_fan_writer import NvidiaFanWriter
 
 logger = logging.getLogger("gpu-fan-control")
@@ -47,6 +50,10 @@ class FanControlDaemon:
         self._start_time = 0.0
         self._config = None
         self._gpu_count = 0
+        # Motherboard fan control (optional)
+        self._mobo_writer: HwmonFanWriter | None = None
+        self._cpu_temp: CpuTempReader | None = None
+        self._mobo_controllers: dict[str, FanController] = {}
 
     def run(self):
         """Main entry point. Blocks until shutdown signal."""
@@ -81,6 +88,7 @@ class FanControlDaemon:
         # before the X server actually accepts connections).
         self._idx_map: dict[int, dict] = {}
         self._initialize_fan_control(gpu_count)
+        self._initialize_mobo_control()
 
         self._running = True
         self._start_time = time.time()
@@ -142,6 +150,104 @@ class FanControlDaemon:
             f"Entering control loop anyway — drift detection will retry fan writes."
         )
 
+    # ------------------------------------------------------------------
+    # Motherboard fans
+    # ------------------------------------------------------------------
+
+    def _initialize_mobo_control(self):
+        """Claim configured motherboard headers. Safe to call again on reload."""
+        self._release_mobo_control()
+
+        mobo = self._config.motherboard
+        if not mobo.enabled or not mobo.fans:
+            return
+
+        self._cpu_temp = CpuTempReader()
+        self._mobo_writer = HwmonFanWriter(mobo.chip)
+        if not self._mobo_writer.available:
+            logger.error("Motherboard fan control disabled: hwmon chip not found")
+            self._mobo_writer = None
+            return
+
+        for name, fan in mobo.fans.items():
+            if not fan.enabled:
+                continue
+            if self._mobo_writer.claim(fan.pwm):
+                self._mobo_controllers[name] = FanController(
+                    fan.curve, self._config.hysteresis_celsius
+                )
+                logger.info(
+                    f"Mobo fan '{name}' ({fan.label}): pwm{fan.pwm}, source={fan.source}"
+                )
+            else:
+                logger.error(f"Mobo fan '{name}': could not claim pwm{fan.pwm}, skipping")
+
+    def _release_mobo_control(self):
+        if self._mobo_writer:
+            self._mobo_writer.release_all()
+        self._mobo_writer = None
+        self._mobo_controllers.clear()
+
+    def _apply_mobo_control(self, gpu_states) -> tuple[list[MoboFanState], int | None]:
+        """Compute and write motherboard fan duties. Returns (states, cpu_temp)."""
+        mobo = self._config.motherboard
+        if not mobo.enabled or self._mobo_writer is None:
+            return [], None
+
+        cpu_temp = self._cpu_temp.read() if self._cpu_temp else None
+        gpu_temps = [g.temperature_c for g in gpu_states if g.error is None and g.temperature_c >= 0]
+        gpu_temp = max(gpu_temps) if gpu_temps else None
+
+        states: list[MoboFanState] = []
+        for name, fan in mobo.fans.items():
+            controller = self._mobo_controllers.get(name)
+            if controller is None:
+                continue
+
+            if fan.source == "cpu":
+                src_temp = cpu_temp
+            elif fan.source == "gpu":
+                src_temp = gpu_temp
+            else:  # max
+                candidates = [t for t in (cpu_temp, gpu_temp) if t is not None]
+                src_temp = max(candidates) if candidates else None
+
+            duty, rpm = self._mobo_writer.read(fan.pwm)
+
+            if src_temp is None:
+                # Failsafe: no usable sensor -> run the top of the curve.
+                target = max(pt.fan_pct for pt in fan.curve)
+                changed = duty != target
+                logger.warning(f"Mobo fan '{name}': no {fan.source} temperature, failsafe {target}%")
+            else:
+                target, changed = controller.compute_fan_speed(0, src_temp)
+
+            drifted = not changed and duty >= 0 and abs(duty - target) > 3
+            error = None
+            if changed or drifted:
+                if self._mobo_writer.set_duty(fan.pwm, target):
+                    reason = "drift correction" if drifted else "curve"
+                    logger.info(
+                        f"Mobo '{name}': {fan.source} {src_temp}C -> pwm{fan.pwm} {target}% "
+                        f"(actual was {duty}%, {rpm} rpm, {reason})"
+                    )
+                else:
+                    error = "write failed"
+                    logger.error(f"Mobo '{name}': failed to set pwm{fan.pwm} to {target}%")
+
+            states.append(MoboFanState(
+                name=name,
+                label=fan.label,
+                pwm=fan.pwm,
+                source=fan.source,
+                source_temp_c=src_temp if src_temp is not None else -1,
+                duty_pct=duty,
+                rpm=rpm,
+                target_pct=target,
+                error=error,
+            ))
+        return states, cpu_temp
+
     def _control_loop(self):
         """Main poll loop."""
         while self._running:
@@ -153,6 +259,7 @@ class FanControlDaemon:
                 self._config = new_config
                 self._controller.update_curve(self._config.fan_curve)
                 self._controller.hysteresis = self._config.hysteresis_celsius
+                self._initialize_mobo_control()
                 logger.info("Fan curve updated from config reload")
 
             # Read all GPU states
@@ -199,11 +306,21 @@ class FanControlDaemon:
                             f"GPU {state.index}: failed to set nv fan:{nv_fan} to {target_pct}%"
                         )
 
+            # Motherboard fans (CPU radiator, case intakes, ...)
+            try:
+                mobo_states, cpu_temp = self._apply_mobo_control(states)
+            except Exception as e:
+                logger.error(f"Motherboard fan control error: {e}")
+                mobo_states, cpu_temp = [], None
+
             # Record history and write status
             self._history.record(states)
+            if mobo_states:
+                self._history.record_mobo(mobo_states, cpu_temp)
             try:
                 write_daemon_status(
-                    states, str(self._config_mgr.path), self._start_time
+                    states, str(self._config_mgr.path), self._start_time,
+                    mobo_states=mobo_states, cpu_temp_c=cpu_temp,
                 )
             except Exception as e:
                 logger.warning(f"Failed to write status: {e}")
@@ -226,6 +343,10 @@ class FanControlDaemon:
                     nv_gpu = self._idx_map.get(idx, {"nv_gpu": idx})["nv_gpu"]
                     self._writer.disable_manual_control(nv_gpu)
                     logger.info(f"GPU {idx} (nv gpu:{nv_gpu}): fan control reset to auto")
+
+        if self._mobo_writer:
+            logger.info("Restoring motherboard fan headers to BIOS control...")
+            self._release_mobo_control()
 
         if self._history:
             self._history.flush()

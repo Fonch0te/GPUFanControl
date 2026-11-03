@@ -39,10 +39,6 @@
     "0": {
       "enabled": true,
       "label": "GPU 0"
-    },
-    "1": {
-      "enabled": true,
-      "label": "GPU 1"
     }
   },
   "profiles": {
@@ -120,5 +116,43 @@
         "fan_pct": 100
       }
     ]
+  },
+  "motherboard": {
+    "enabled": true,
+    "chip": "nct6796",
+    "fans": {
+      "cpu_radiator": {
+        "pwm": 2,
+        "label": "CPU radiator (CPU_FAN / fan bus)",
+        "enabled": true,
+        "source": "cpu",
+        "curve": [
+          {
+            "temp_c": 30,
+            "fan_pct": 30
+          },
+          {
+            "temp_c": 45,
+            "fan_pct": 35
+          },
+          {
+            "temp_c": 55,
+            "fan_pct": 45
+          },
+          {
+            "temp_c": 65,
+            "fan_pct": 60
+          },
+          {
+            "temp_c": 75,
+            "fan_pct": 80
+          },
+          {
+            "temp_c": 85,
+            "fan_pct": 100
+          }
+        ]
+      }
+    }
   }
 }
