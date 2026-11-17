@@ -38,8 +38,10 @@ sed -e "s|@PROJECT_DIR@|$PROJECT_DIR|g" \
 mkdir -p "$TARGET_HOME/gpu-fan-control/data"
 systemctl daemon-reload
 
-echo "[3/3] Enabling and starting..."
-systemctl enable --now gpu-fan-control.service
+echo "[3/3] Enabling and restarting..."
+systemctl enable gpu-fan-control.service
+# restart, not start: an already-running daemon must pick up the new unit and code
+systemctl restart gpu-fan-control.service
 sleep 3
 systemctl status gpu-fan-control.service --no-pager | head -12
 echo ""
