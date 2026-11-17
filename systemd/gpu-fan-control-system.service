@@ -22,6 +22,9 @@ User=root
 Environment=DISPLAY=:1
 Environment=XAUTHORITY=/run/user/@UID@/gdm/Xauthority
 Environment=GPU_FAN_CONTROL_DATA_DIR=@HOME@/gpu-fan-control/data
+# Super I/O fan controller driver (motherboard headers); not auto-loaded on
+# every board/kernel. '-' = don't fail the unit if the module is absent.
+ExecStartPre=-/sbin/modprobe nct6775
 ExecStart=@PROJECT_DIR@/venv/bin/python @PROJECT_DIR@/src/daemon.py --config @PROJECT_DIR@/config/gpu-fan-control.json
 ExecStop=/bin/kill -TERM $MAINPID
 WorkingDirectory=@PROJECT_DIR@

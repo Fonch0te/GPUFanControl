@@ -57,6 +57,7 @@ class FanControlDaemon:
         self._mobo_controllers: dict[str, FanController] = {}
         # name -> deque of (timestamp, raw temp) for rolling-average smoothing
         self._mobo_temp_hist: dict[str, deque] = {}
+        self._mobo_next_retry = 0.0
 
     def run(self):
         """Main entry point. Blocks until shutdown signal."""
@@ -195,8 +196,18 @@ class FanControlDaemon:
     def _apply_mobo_control(self, gpu_states) -> tuple[list[MoboFanState], int | None]:
         """Compute and write motherboard fan duties. Returns (states, cpu_temp)."""
         mobo = self._config.motherboard
-        if not mobo.enabled or self._mobo_writer is None:
+        if not mobo.enabled:
             return [], None
+        if self._mobo_writer is None:
+            # Chip was missing at startup (e.g. nct6775 module not loaded yet).
+            # Retry once a minute instead of staying off until the next restart.
+            now = time.time()
+            if now < self._mobo_next_retry:
+                return [], None
+            self._mobo_next_retry = now + 60
+            self._initialize_mobo_control()
+            if self._mobo_writer is None:
+                return [], None
 
         cpu_temp = self._cpu_temp.read() if self._cpu_temp else None
         gpu_temps = [g.temperature_c for g in gpu_states if g.error is None and g.temperature_c >= 0]
