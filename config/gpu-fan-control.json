@@ -153,6 +153,35 @@
             "fan_pct": 100
           }
         ]
+      },
+      "case_intakes": {
+        "pwm": 4,
+        "label": "Case intakes (M.2_FAN)",
+        "enabled": true,
+        "source": "gpu",
+        "smoothing_seconds": 10,
+        "curve": [
+          {
+            "temp_c": 30,
+            "fan_pct": 30
+          },
+          {
+            "temp_c": 50,
+            "fan_pct": 40
+          },
+          {
+            "temp_c": 60,
+            "fan_pct": 55
+          },
+          {
+            "temp_c": 70,
+            "fan_pct": 75
+          },
+          {
+            "temp_c": 80,
+            "fan_pct": 100
+          }
+        ]
       }
     }
   }
