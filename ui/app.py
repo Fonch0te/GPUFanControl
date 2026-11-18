@@ -16,4 +16,4 @@ st.set_page_config(
 
 st.title("GPU Fan Control Panel")
 st.caption("GPU and motherboard fan curves, temperature monitoring")
-st.markdown("Use the sidebar to navigate between Dashboard, Fan Curve Editor, History, and Motherboard Fans.")
+st.markdown("Use the sidebar to navigate between Dashboard, Fan Curve Editor, History, Motherboard Fans, and Power Limits.")

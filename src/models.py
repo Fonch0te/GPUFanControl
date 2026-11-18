@@ -20,6 +20,7 @@ class GpuConfig:
     enabled: bool = True
     label: str = ""
     fan_index: Optional[int] = None  # nvidia-settings fan index; None = auto-detect
+    power_limit_w: Optional[int] = None  # board power cap in watts; None = driver default
 
 
 @dataclass
@@ -86,6 +87,11 @@ class GpuState:
     name: str
     timestamp: float = field(default_factory=time.time)
     error: Optional[str] = None
+    # Power cap as enforced by the driver right now, and what the card allows
+    power_limit_w: int = -1
+    power_limit_default_w: int = -1
+    power_limit_min_w: int = -1
+    power_limit_max_w: int = -1
 
 
 @dataclass

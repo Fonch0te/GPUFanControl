@@ -92,6 +92,10 @@ class ConfigManager:
         if config.fan_curve[-1].fan_pct < 100:
             logger.warning("Fan curve max point is not 100%% — GPUs may throttle at high temps")
 
+        for idx, gpu in config.gpus.items():
+            if gpu.power_limit_w is not None and not (50 <= int(gpu.power_limit_w) <= 1000):
+                raise ValueError(f"GPU {idx}: power_limit_w must be 50-1000 W, got {gpu.power_limit_w}")
+
         mobo = config.motherboard
         for name, fan in mobo.fans.items():
             if not isinstance(fan.pwm, int) or fan.pwm < 1:
@@ -123,6 +127,7 @@ class ConfigManager:
                 enabled=gpu_raw.get("enabled", True),
                 label=gpu_raw.get("label", f"GPU {idx_str}"),
                 fan_index=gpu_raw.get("fan_index"),
+                power_limit_w=gpu_raw.get("power_limit_w"),
             )
 
         profiles = {}
@@ -183,6 +188,7 @@ class ConfigManager:
                     "enabled": gpu.enabled,
                     "label": gpu.label,
                     **({"fan_index": gpu.fan_index} if gpu.fan_index is not None else {}),
+                    **({"power_limit_w": gpu.power_limit_w} if gpu.power_limit_w is not None else {}),
                 }
                 for idx, gpu in config.gpus.items()
             },

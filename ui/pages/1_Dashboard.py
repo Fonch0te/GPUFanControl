@@ -50,7 +50,8 @@ def render_gpu_card(gpu: dict, col):
         c2.metric("Fan Speed", f"{fan}%", delta=f"target: {target}%" if target >= 0 else None)
 
         c3, c4 = st.columns(2)
-        c3.metric("Power", f"{power} W")
+        limit = gpu.get("power_limit_w", -1)
+        c3.metric("Power", f"{power} W", delta=f"limit: {limit} W" if limit > 0 else None, delta_color="off")
         c4.metric("Utilization", f"{util}%")
 
         mem_pct = round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0

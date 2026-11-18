@@ -76,6 +76,20 @@ config/default.json            Factory defaults
 - nvidia-settings CLI
 - X11 display (DISPLAY=:1)
 
+## GPU power limits
+
+Each GPU can be capped in watts, on the **Power Limits** UI page or in the
+config:
+
+```json
+"gpus": { "0": { "enabled": true, "label": "GPU 0", "power_limit_w": 280 } }
+```
+
+The driver forgets the limit on every reboot, so the daemon applies it at
+startup, on config reload, and again whenever the enforced value drifts. The
+value is clamped to the range the card reports. Removing `power_limit_w`
+puts the card back on its default limit. Needs root (NVML), like fan writes.
+
 ## Motherboard fans (CPU radiator, case intakes)
 
 The daemon can also drive Super I/O fan headers (Nuvoton NCT67xx and

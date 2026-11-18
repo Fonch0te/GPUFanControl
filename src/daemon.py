@@ -58,6 +58,8 @@ class FanControlDaemon:
         # name -> deque of (timestamp, raw temp) for rolling-average smoothing
         self._mobo_temp_hist: dict[str, deque] = {}
         self._mobo_next_retry = 0.0
+        # GPUs whose power limit this daemon has changed from the driver default
+        self._power_limited: set[int] = set()
 
     def run(self):
         """Main entry point. Blocks until shutdown signal."""
@@ -93,6 +95,7 @@ class FanControlDaemon:
         self._idx_map: dict[int, dict] = {}
         self._initialize_fan_control(gpu_count)
         self._initialize_mobo_control()
+        self._apply_power_limits()
 
         self._running = True
         self._start_time = time.time()
@@ -153,6 +156,60 @@ class FanControlDaemon:
             f"Fan control initialization failed after {max_attempts} attempts. "
             f"Entering control loop anyway — drift detection will retry fan writes."
         )
+
+    # ------------------------------------------------------------------
+    # GPU power limits
+    # ------------------------------------------------------------------
+
+    def _apply_power_limits(self, states=None):
+        """Make each GPU's power cap match the config.
+
+        The driver forgets the limit on every reboot (and on some resets), so
+        this runs at startup, on config reload, and whenever a poll shows the
+        enforced limit drifting from the configured one. A GPU with no
+        power_limit_w is put back on the driver default if we changed it earlier.
+        """
+        for idx in range(self._gpu_count):
+            gpu_cfg = self._config.gpus.get(str(idx))
+            wanted = gpu_cfg.power_limit_w if gpu_cfg is not None else None
+
+            if states is not None:
+                st = next((s for s in states if s.index == idx), None)
+                limits = {
+                    "power_limit_w": st.power_limit_w,
+                    "power_limit_default_w": st.power_limit_default_w,
+                    "power_limit_min_w": st.power_limit_min_w,
+                    "power_limit_max_w": st.power_limit_max_w,
+                } if st is not None and st.error is None else None
+            else:
+                limits = self._monitor.read_power_limits(idx)
+            if not limits or limits["power_limit_w"] < 0:
+                continue  # card does not expose a power limit
+
+            if wanted is None:
+                if idx not in self._power_limited:
+                    continue  # never touched it; leave whatever is set
+                target = limits["power_limit_default_w"]
+            else:
+                target = max(limits["power_limit_min_w"],
+                             min(limits["power_limit_max_w"], int(wanted)))
+
+            if limits["power_limit_w"] == target:
+                if wanted is None:
+                    self._power_limited.discard(idx)
+                continue
+
+            ok, applied = self._monitor.set_power_limit(idx, target)
+            if ok:
+                note = "" if wanted is None or applied == wanted else f" (requested {wanted} W, clamped)"
+                what = "restored to default" if wanted is None else "set"
+                logger.info(
+                    f"GPU {idx}: power limit {what}: {limits['power_limit_w']} W -> {applied} W{note}"
+                )
+                if wanted is None:
+                    self._power_limited.discard(idx)
+                else:
+                    self._power_limited.add(idx)
 
     # ------------------------------------------------------------------
     # Motherboard fans
@@ -294,6 +351,12 @@ class FanControlDaemon:
 
             # Read all GPU states
             states = self._monitor.read_all()
+
+            # Power caps: apply config changes and re-assert after driver resets
+            try:
+                self._apply_power_limits(states)
+            except Exception as e:
+                logger.error(f"Power limit error: {e}")
 
             # Apply fan control per GPU
             for state in states:

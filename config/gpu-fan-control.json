@@ -138,11 +138,11 @@
           },
           {
             "temp_c": 55,
-            "fan_pct": 60
+            "fan_pct": 65
           },
           {
             "temp_c": 65,
-            "fan_pct": 70
+            "fan_pct": 85
           },
           {
             "temp_c": 75,

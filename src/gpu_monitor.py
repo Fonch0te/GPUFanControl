@@ -40,6 +40,7 @@ class GpuMonitor:
             util = pynvml.nvmlDeviceGetUtilizationRates(handle)
             mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
             name = pynvml.nvmlDeviceGetName(handle)
+            limits = self.read_power_limits(index)
 
             return GpuState(
                 index=index,
@@ -51,6 +52,7 @@ class GpuMonitor:
                 memory_used_mb=mem.used // (1024 * 1024),
                 memory_total_mb=mem.total // (1024 * 1024),
                 name=name if isinstance(name, str) else name.decode(),
+                **limits,
             )
         except Exception as e:
             logger.warning(f"GPU {index} read error: {e}")
@@ -66,6 +68,40 @@ class GpuMonitor:
                 name=f"GPU {index}",
                 error=str(e),
             )
+
+    def read_power_limits(self, index: int) -> dict:
+        """Current/default/min/max board power limit in watts (-1 if unsupported)."""
+        out = {
+            "power_limit_w": -1, "power_limit_default_w": -1,
+            "power_limit_min_w": -1, "power_limit_max_w": -1,
+        }
+        try:
+            handle = self._handles[index]
+            out["power_limit_w"] = round(pynvml.nvmlDeviceGetPowerManagementLimit(handle) / 1000)
+            out["power_limit_default_w"] = round(
+                pynvml.nvmlDeviceGetPowerManagementDefaultLimit(handle) / 1000
+            )
+            lo, hi = pynvml.nvmlDeviceGetPowerManagementLimitConstraints(handle)
+            out["power_limit_min_w"] = round(lo / 1000)
+            out["power_limit_max_w"] = round(hi / 1000)
+        except Exception as e:
+            logger.debug(f"GPU {index}: power limit not readable: {e}")
+        return out
+
+    def set_power_limit(self, index: int, watts: int) -> tuple[bool, int]:
+        """Set the board power limit (needs root). Clamped to what the card allows.
+
+        Returns (success, watts_actually_requested).
+        """
+        try:
+            handle = self._handles[index]
+            lo, hi = pynvml.nvmlDeviceGetPowerManagementLimitConstraints(handle)
+            mw = max(lo, min(hi, int(watts) * 1000))
+            pynvml.nvmlDeviceSetPowerManagementLimit(handle, mw)
+            return True, round(mw / 1000)
+        except Exception as e:
+            logger.error(f"GPU {index}: failed to set power limit to {watts} W: {e}")
+            return False, int(watts)
 
     def read_all(self) -> list[GpuState]:
         """Read all GPUs. Never raises; errors are per-GPU."""
