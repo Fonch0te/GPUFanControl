@@ -7,6 +7,7 @@ Requires DISPLAY environment variable for X11 context.
 
 import logging
 import os
+import re
 import subprocess
 
 logger = logging.getLogger("gpu-fan-control.writer")
@@ -16,6 +17,35 @@ class NvidiaFanWriter:
     def __init__(self, display: str = ":1"):
         self._display = display
         self._env = {**os.environ, "DISPLAY": display}
+
+    def detect_gpu_fans(self) -> dict[int, list[int]]:
+        """
+        Ask nvidia-settings which fan controllers belong to which GPU.
+
+        Cards differ: an RTX A6000 has one controller, an RTX 3090 has two, and
+        fan numbering does not follow GPU numbering (gpu:0 may own fan:2/fan:3).
+        Returns {nv_gpu_index: [nv_fan_index, ...]}; empty dict on failure.
+        """
+        try:
+            result = subprocess.run(
+                ["nvidia-settings", "-q", "gpus", "--verbose"],
+                env=self._env, capture_output=True, text=True, timeout=10,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to query GPU fan topology: {e}")
+            return {}
+        fans: dict[int, list[int]] = {}
+        current = None
+        for line in result.stdout.splitlines():
+            m = re.search(r"\[gpu:(\d+)\]", line)
+            if m:
+                current = int(m.group(1))
+                fans.setdefault(current, [])
+                continue
+            m = re.search(r"\[fan:(\d+)\]", line)
+            if m and current is not None:
+                fans[current].append(int(m.group(1)))
+        return {g: sorted(set(f)) for g, f in fans.items() if f}
 
     def detect_index_mapping(self, gpu_count: int) -> dict[int, dict]:
         """
@@ -72,18 +102,22 @@ class NvidiaFanWriter:
             # Invert nvsettings: {pci_bus: nv_idx}
             bus_to_nv = {bus: nv_idx for nv_idx, bus in nvsettings_buses.items()}
 
+            gpu_fans = self.detect_gpu_fans()
             mapping: dict[int, dict] = {}
             for pynvml_idx, bus in nvml_buses.items():
                 if bus in bus_to_nv:
                     nv_idx = bus_to_nv[bus]
+                    # Real topology if known; else assume fan:N = gpu:N
+                    nv_fans = gpu_fans.get(nv_idx) or [nv_idx]
                     mapping[pynvml_idx] = {
                         "nv_gpu": nv_idx,
-                        "nv_fan": nv_idx,  # fan:N = gpu:N (1 fan per card)
+                        "nv_fan": nv_fans[0],
+                        "nv_fans": nv_fans,
                         "pci_bus": f"0x{bus:02X}",
                     }
                     logger.info(
                         f"Mapped: pynvml gpu:{pynvml_idx} -> "
-                        f"nvidia-settings gpu:{nv_idx}/fan:{nv_idx} "
+                        f"nvidia-settings gpu:{nv_idx}, fans {nv_fans} "
                         f"(PCI bus 0x{bus:02X})"
                     )
 
@@ -98,7 +132,7 @@ class NvidiaFanWriter:
             "(pynvml gpu:N -> nvidia-settings gpu:N/fan:N)"
         )
         return {
-            i: {"nv_gpu": i, "nv_fan": i, "pci_bus": "unknown"}
+            i: {"nv_gpu": i, "nv_fan": i, "nv_fans": [i], "pci_bus": "unknown"}
             for i in range(gpu_count)
         }
 

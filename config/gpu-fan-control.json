@@ -167,11 +167,11 @@
           },
           {
             "temp_c": 50,
-            "fan_pct": 40
+            "fan_pct": 55
           },
           {
             "temp_c": 60,
-            "fan_pct": 55
+            "fan_pct": 65
           },
           {
             "temp_c": 70,

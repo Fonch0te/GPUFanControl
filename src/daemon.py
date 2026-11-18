@@ -119,10 +119,10 @@ class FanControlDaemon:
 
             self._idx_map.clear()
             for idx in range(gpu_count):
-                entry = auto_map.get(idx, {"nv_gpu": idx, "nv_fan": idx, "pci_bus": "unknown"})
+                entry = auto_map.get(idx, {"nv_gpu": idx, "nv_fan": idx, "nv_fans": [idx], "pci_bus": "unknown"})
                 gpu_cfg = self._config.gpus.get(str(idx))
                 if gpu_cfg is not None and gpu_cfg.fan_index is not None:
-                    entry = {**entry, "nv_fan": gpu_cfg.fan_index}
+                    entry = {**entry, "nv_fan": gpu_cfg.fan_index, "nv_fans": [gpu_cfg.fan_index]}
                 self._idx_map[idx] = entry
 
             # Step 2: enable manual fan control on each enabled GPU
@@ -138,7 +138,7 @@ class FanControlDaemon:
             if all_ok:
                 for idx, entry in self._idx_map.items():
                     src = f"fan_index from config" if self._config.gpus.get(str(idx)) and self._config.gpus[str(idx)].fan_index is not None else f"auto-detected via PCI bus {entry['pci_bus']}"
-                    logger.info(f"GPU {idx}: nv_gpu={entry['nv_gpu']}, nv_fan={entry['nv_fan']} ({src})")
+                    logger.info(f"GPU {idx}: nv_gpu={entry['nv_gpu']}, nv_fans={entry.get('nv_fans', [entry['nv_fan']])} ({src})")
                 logger.info(f"Fan control initialized successfully (attempt {attempt})")
                 return
 
@@ -321,10 +321,13 @@ class FanControlDaemon:
                 )
 
                 if changed or drifted:
-                    nv_fan = self._idx_map.get(
-                        state.index, {"nv_fan": state.index}
-                    )["nv_fan"]
-                    success = self._writer.set_fan_speed(nv_fan, target_pct)
+                    entry = self._idx_map.get(state.index, {"nv_fan": state.index})
+                    # A card can have several fan controllers (RTX 3090: two)
+                    nv_fans = entry.get("nv_fans") or [entry["nv_fan"]]
+                    success = all(
+                        [self._writer.set_fan_speed(f, target_pct) for f in nv_fans]
+                    )
+                    nv_fan = ",".join(str(f) for f in nv_fans)
                     if success:
                         reason = "drift correction" if drifted else "curve"
                         logger.info(
