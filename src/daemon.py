@@ -60,6 +60,14 @@ class FanControlDaemon:
         self._mobo_next_retry = 0.0
         # GPUs whose power limit this daemon has changed from the driver default
         self._power_limited: set[int] = set()
+        # GPU fan control needs a logged-in X session. Until one exists (boot,
+        # logout) writes fail; the control loop keeps retrying initialization.
+        self._idx_map: dict[int, dict] = {}
+        self._fan_ready = False
+        self._fan_next_retry = 0.0
+        self._fan_fail_streak = 0
+        self._drift_streak: dict[int, int] = {}
+        self._fan_last_reinit = 0.0
 
     def run(self):
         """Main entry point. Blocks until shutdown signal."""
@@ -92,7 +100,6 @@ class FanControlDaemon:
         # Build index mapping and enable manual fan control, retrying if X11
         # isn't ready yet (common at boot — display-manager.service is "started"
         # before the X server actually accepts connections).
-        self._idx_map: dict[int, dict] = {}
         self._initialize_fan_control(gpu_count)
         self._initialize_mobo_control()
         self._apply_power_limits()
@@ -106,56 +113,70 @@ class FanControlDaemon:
         finally:
             self._shutdown()
 
+    FAN_RETRY_SECONDS = 30
+    FAN_REINIT_MIN_INTERVAL = 300
+
     def _initialize_fan_control(self, gpu_count: int):
-        """Detect GPU index mapping and enable manual fan control.
+        """Startup: a few quick attempts, then hand over to the control loop.
 
-        Retries with backoff when nvidia-settings can't reach X11 (boot race).
-        Gives up after ~5 minutes and enters the control loop anyway — the drift
-        detector will keep retrying set_fan_speed each poll cycle.
+        nvidia-settings needs a running X session. At boot that only exists
+        once someone has logged in, which can be minutes or hours later, so
+        startup must not block on it: motherboard fans and power limits do not
+        need X and should come up immediately. The control loop calls
+        _try_initialize_fan_control() every FAN_RETRY_SECONDS until it works.
         """
-        max_attempts = 10
-        backoff_seconds = 5
-
-        for attempt in range(1, max_attempts + 1):
-            # Step 1: detect PCI bus mapping
-            auto_map = self._writer.detect_index_mapping(gpu_count)
-
-            self._idx_map.clear()
-            for idx in range(gpu_count):
-                entry = auto_map.get(idx, {"nv_gpu": idx, "nv_fan": idx, "nv_fans": [idx], "pci_bus": "unknown"})
-                gpu_cfg = self._config.gpus.get(str(idx))
-                if gpu_cfg is not None and gpu_cfg.fan_index is not None:
-                    entry = {**entry, "nv_fan": gpu_cfg.fan_index, "nv_fans": [gpu_cfg.fan_index]}
-                self._idx_map[idx] = entry
-
-            # Step 2: enable manual fan control on each enabled GPU
-            all_ok = True
-            for idx in range(gpu_count):
-                gpu_cfg = self._config.gpus.get(str(idx))
-                enabled = gpu_cfg.enabled if gpu_cfg is not None else True
-                if enabled:
-                    nv_gpu = self._idx_map[idx]["nv_gpu"]
-                    if not self._writer.enable_manual_control(nv_gpu):
-                        all_ok = False
-
-            if all_ok:
-                for idx, entry in self._idx_map.items():
-                    src = f"fan_index from config" if self._config.gpus.get(str(idx)) and self._config.gpus[str(idx)].fan_index is not None else f"auto-detected via PCI bus {entry['pci_bus']}"
-                    logger.info(f"GPU {idx}: nv_gpu={entry['nv_gpu']}, nv_fans={entry.get('nv_fans', [entry['nv_fan']])} ({src})")
-                logger.info(f"Fan control initialized successfully (attempt {attempt})")
+        for attempt in range(1, 4):
+            if self._try_initialize_fan_control(gpu_count):
                 return
-
-            wait = backoff_seconds * attempt
-            logger.warning(
-                f"nvidia-settings not ready (attempt {attempt}/{max_attempts}), "
-                f"retrying in {wait}s..."
-            )
-            time.sleep(wait)
-
-        logger.error(
-            f"Fan control initialization failed after {max_attempts} attempts. "
-            f"Entering control loop anyway — drift detection will retry fan writes."
+            time.sleep(5)
+        logger.warning(
+            "GPU fan control not available yet (no X session on "
+            f"{self._config.display}?). GPUs stay on their firmware fan curve; "
+            f"retrying every {self.FAN_RETRY_SECONDS}s."
         )
+
+    def _try_initialize_fan_control(self, gpu_count: int) -> bool:
+        """One attempt: detect the GPU/fan mapping and enable manual control."""
+        self._fan_next_retry = time.time() + self.FAN_RETRY_SECONDS
+        auto_map = self._writer.detect_index_mapping(gpu_count)
+
+        idx_map: dict[int, dict] = {}
+        for idx in range(gpu_count):
+            entry = auto_map.get(idx, {"nv_gpu": idx, "nv_fan": idx, "nv_fans": [idx], "pci_bus": "unknown"})
+            gpu_cfg = self._config.gpus.get(str(idx))
+            if gpu_cfg is not None and gpu_cfg.fan_index is not None:
+                entry = {**entry, "nv_fan": gpu_cfg.fan_index, "nv_fans": [gpu_cfg.fan_index]}
+            idx_map[idx] = entry
+
+        all_ok = True
+        for idx in range(gpu_count):
+            gpu_cfg = self._config.gpus.get(str(idx))
+            enabled = gpu_cfg.enabled if gpu_cfg is not None else True
+            if enabled and not self._writer.enable_manual_control(idx_map[idx]["nv_gpu"]):
+                all_ok = False
+
+        if not all_ok:
+            self._fan_ready = False
+            return False
+
+        self._idx_map = idx_map
+        for idx, entry in idx_map.items():
+            gpu_cfg = self._config.gpus.get(str(idx))
+            src = (
+                "fan_index from config"
+                if gpu_cfg is not None and gpu_cfg.fan_index is not None
+                else f"auto-detected via PCI bus {entry['pci_bus']}"
+            )
+            logger.info(f"GPU {idx}: nv_gpu={entry['nv_gpu']}, nv_fans={entry.get('nv_fans', [entry['nv_fan']])} ({src})")
+        logger.info("GPU fan control initialized")
+        self._fan_ready = True
+        self._fan_fail_streak = 0
+        self._drift_streak.clear()
+        # Forget remembered targets so every fan is written on the next poll
+        self._controller = FanController(
+            self._config.fan_curve, self._config.hysteresis_celsius
+        )
+        return True
 
     # ------------------------------------------------------------------
     # GPU power limits
@@ -358,6 +379,10 @@ class FanControlDaemon:
             except Exception as e:
                 logger.error(f"Power limit error: {e}")
 
+            # GPU fans need an X session; keep trying until one is there
+            if not self._fan_ready and time.time() >= self._fan_next_retry:
+                self._try_initialize_fan_control(self._gpu_count)
+
             # Apply fan control per GPU
             for state in states:
                 idx_str = str(state.index)
@@ -367,6 +392,11 @@ class FanControlDaemon:
                     continue
 
                 if state.error:
+                    continue
+
+                if not self._fan_ready:
+                    # Card is on its firmware curve; report it as such
+                    state.fan_target_pct = state.fan_speed_pct
                     continue
 
                 target_pct, changed = self._controller.compute_fan_speed(
@@ -397,10 +427,28 @@ class FanControlDaemon:
                             f"GPU {state.index}: {state.temperature_c}C -> nv fan:{nv_fan} {target_pct}% "
                             f"(actual was {state.fan_speed_pct}%, {reason})"
                         )
+                        self._fan_fail_streak = 0
                     else:
                         logger.error(
                             f"GPU {state.index}: failed to set nv fan:{nv_fan} to {target_pct}%"
                         )
+                        self._fan_fail_streak += 1
+
+                # A fan that never reaches its target means manual control was
+                # lost (X restarted, logout/login) or the mapping is wrong.
+                self._drift_streak[state.index] = (
+                    self._drift_streak.get(state.index, 0) + 1 if drifted else 0
+                )
+
+            if self._fan_ready:
+                stuck = [i for i, n in self._drift_streak.items() if n >= 6]
+                lost = self._fan_fail_streak >= 3
+                if lost or (stuck and time.time() - self._fan_last_reinit > self.FAN_REINIT_MIN_INTERVAL):
+                    why = "writes failing" if lost else f"GPU {stuck} not following its target"
+                    logger.warning(f"GPU fan control lost ({why}); re-initializing")
+                    self._fan_last_reinit = time.time()
+                    self._fan_ready = False
+                    self._fan_next_retry = 0.0
 
             # Motherboard fans (CPU radiator, case intakes, ...)
             try:
